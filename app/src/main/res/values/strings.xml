@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="xposed_description">OriginBand：把小米运动健康里的小米手环/手表接入 OriginOS 与 vivo 健康。</string>
+</resources>

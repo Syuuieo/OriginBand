@@ -1,0 +1,114 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+    id 'com.google.protobuf'
+}
+
+android {
+    namespace 'com.originband.link'
+    compileSdk 37
+    buildToolsVersion '36.0.0'
+    defaultConfig {
+        applicationId 'com.originband.link'
+        minSdk 35
+        targetSdk 37
+        versionCode 1
+        versionName '0.1.0-alpha'
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+        // LSPosed auto hot reload only fires when the installed versionCode changes.
+        // For a dev loop: ./gradlew :app:assembleDebug -PhotReloadVersionCode=<higher number>
+        if (project.hasProperty('hotReloadVersionCode')) {
+            versionCode project.property('hotReloadVersionCode') as int
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+    buildFeatures {
+        buildConfig true
+        compose true
+    }
+    packaging {
+        dex {
+            useLegacyPackaging = true
+        }
+        resources {
+            excludes += [
+                'google/protobuf/*.proto',
+                'META-INF/androidx/**',
+                'META-INF/LICENSE*',
+                'META-INF/NOTICE*',
+                'META-INF/DEPENDENCIES',
+                'META-INF/*.version',
+                'DebugProbesKt.bin',
+                'kotlin/**/*.kotlin_builtins',
+            ]
+        }
+    }
+    def keyPath = System.getenv('ORIGINBAND_KEYSTORE')
+    if (keyPath != null) {
+        signingConfigs {
+            projectKey {
+                storeFile file(keyPath)
+                storePassword System.getenv('ORIGINBAND_STORE_PASSWORD')
+                keyAlias System.getenv('ORIGINBAND_KEY_ALIAS')
+                keyPassword System.getenv('ORIGINBAND_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            if (keyPath != null) {
+                signingConfig signingConfigs.projectKey
+            }
+        }
+        release {
+            signingConfig keyPath != null ? signingConfigs.projectKey : null
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == 'packageRelease') {
+        doFirst {
+            ['ORIGINBAND_KEYSTORE', 'ORIGINBAND_STORE_PASSWORD', 'ORIGINBAND_KEY_ALIAS',
+             'ORIGINBAND_KEY_PASSWORD'].each {
+                if (!System.getenv(it)) throw new GradleException("Missing signing environment: ${it}")
+            }
+        }
+    }
+}
+
+protobuf {
+    protoc { artifact = 'com.google.protobuf:protoc:4.32.0' }
+    generateProtoTasks {
+        all().configureEach { task ->
+            task.builtins { java { option 'lite' } }
+        }
+    }
+}
+
+dependencies {
+    compileOnly 'io.github.libxposed:api:102.0.0'
+    implementation 'com.google.protobuf:protobuf-javalite:4.32.0'
+    implementation 'androidx.core:core:1.16.0'
+    implementation platform('androidx.compose:compose-bom:2026.06.00')
+    implementation 'androidx.activity:activity-compose:1.13.0'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-core'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'io.github.libxposed:api:102.0.0'
+    testImplementation 'org.json:json:20250517'
+}

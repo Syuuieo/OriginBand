@@ -1,0 +1,79 @@
+{
+  "targets": {
+    "com.vivo.health": {
+      "versionName": "7.1.3.72",
+      "versionCode": 71372,
+      "sha256": "7AAB1571F1373A18BC30F9C804D65DB1420C7BFF26A2635DFABDB9594C4D71F6",
+      "processes": {
+        "main": "com.vivo.health",
+        "deviceConn": "com.vivo.health.deviceConn",
+        "permanent": "com.vivo.health.permanent"
+      },
+      "anchors": {
+        "antiXposedGuard": {
+          "class": "com.vivo.health.app.VivoHealthApplication",
+          "method": "q",
+          "note": "Non-vivo LSPAppComponentFactoryStub kill guard (3190ms)"
+        },
+        "account": {
+          "class": "com.vivo.framework.AccountInit",
+          "singletonField": "a",
+          "getOpenIdMethod": "e"
+        },
+        "dbInit": {
+          "class": "com.vivo.framework.db.BaseDbInit",
+          "singletonField": "a",
+          "healthDaoMethod": "b",
+          "deviceDaoMethod": "d"
+        },
+        "deviceManager": {
+          "facade": "com.vivo.framework.devices.process.basic.devicemanager.DeviceManager",
+          "devImpl": "com.vivo.framework.devices.process.dev.DevDeviceManager",
+          "mainImpl": "com.vivo.framework.devices.process.main.MainDeviceManager",
+          "factory": "com.vivo.framework.devices.DeviceFactory",
+          "onlineMgr": "com.vivo.framework.CenterManager.OnlineDeviceManager",
+          "batteryMethod": "updateStorageAndBattry"
+        },
+        "manualSync": {
+          "devServiceImp": "com.vivo.health.devices.watch.devicehelper.DevicesServiceManagerImp",
+          "healthModule": "com.vivo.health.devices.watch.healthdata.HealthDataModule",
+          "sportModule": "com.vivo.health.devices.watch.sport.SportModule"
+        },
+        "findWatch": {
+          "class": "com.vivo.health.devices.watch.find.ble.FindBleHelper",
+          "startMethod": "t5",
+          "stopMethod": "H0"
+        },
+        "healthWriters": {
+          "healthDbHelper": "com.vivo.framework.health.HealthDBHelper",
+          "oxygenHelper": "com.vivo.framework.health.HealthDbOxygenHelper",
+          "todayActivityHelper": "com.vivo.framework.sport.SportTodayActivityDBHelper",
+          "watchSportHelper": "com.vivo.framework.sport.helper.WatchSportRecordDBHelper",
+          "stepService": "com.vivo.health.step.StepService",
+          "stepSdkHelper": "com.vivo.health.step.StepSDKHelper",
+          "joviStepHelper": "com.vivo.health.step.JoviStepLibDbHelper",
+          "healthKitSyncImpl": "com.vivo.health.healthkit.HealthKitSyncImpl",
+          "modulePhysicalImpl": "com.vivo.health.physical.ModulePhysicalImpl",
+          "modulePhysicalInterface": "com.vivo.health.lib.router.physical.IModulePhysical"
+        },
+        "processEventBus": {
+          "class": "com.vivo.framework.devices.process.basic.event.ProcessEventManager",
+          "mainKey": "PROCESS_KEY_MAIN",
+          "devKey": "PROCESS_KEY_DEV",
+          "events": [
+            "com.vivo.health.ACTIVITY_DATA_SYNC_SUCCESS",
+            "com.vivo.health.HEALTH_DATA_SYNC_SUCCESS",
+            "com.vivo.health.postHealthModel",
+            "com.vivo.health.device_dynamic_info",
+            "com.vivo.health.sport_record.watch.new"
+          ]
+        }
+      }
+    },
+    "com.vivo.healthservice": {
+      "versionName": "2.2.0.2_g9b15f7a7",
+      "versionCode": 22002,
+      "sha256": "86A1321F58DAACD8AF8B7754D5D6CFB2EE601E9F9BBF15C314411AE526E1DA44"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+Original bridge source: SPDX-License-Identifier: AGPL-3.0-or-later
+
+Gadgetbridge reference sources retain their upstream copyright and license notices.
+See compat/upstream.json for immutable revision and file hashes.
+SPP V2 framing, SPP V1 envelopes, BLE V1 chunks, session cryptography and the protobuf schema are adapted for diagnostics.
+Selection is grounded in observed Xiaomi SPP V2 + WearAuthV2 traffic, plus Gadgetbridge V1/BLE framing.
+Vendor APK, DEX, native libraries and decompiled sources are research inputs only.
+They must not be included in a bridge APK, source distribution, or KernelSU ZIP.
+
+OriginBand derivative notice:
+OriginBand is a derivative work based on MiaM1ku/Miband-OPlusBridge
+(upstream commit 04dfd26fabb9bbac4aa9d3cea0999aaeaa9a31b9),
+licensed under AGPL-3.0-or-later.

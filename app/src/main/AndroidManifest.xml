@@ -1,0 +1,106 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <permission android:name="com.originband.link.permission.FIND_PHONE"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.originband.link.permission.FIND_PHONE" />
+    <permission android:name="com.originband.link.permission.SET_DND"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.originband.link.permission.SET_DND" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries>
+        <package android:name="com.mi.health" />
+        <package android:name="com.vivo.health" />
+        <package android:name="com.android.BBKClock" />
+        <package android:name="com.vivo.iot" />
+        <package android:name="com.tencent.mobileqq" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+    <application android:name=".BridgeApplication" android:label="OriginBand"
+        android:description="@string/xposed_description" android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.OriginBand"
+        android:forceQueryable="true"
+        android:supportsRtl="true" android:usesCleartextTraffic="false">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".service.BandTileActivity" android:exported="false"
+            android:excludeFromRecents="true" android:noHistory="true"
+            android:theme="@style/Theme.OriginBand.Tile" />
+        <activity android:name=".DiagnosticActivity" android:exported="false" />
+        <activity android:name=".DeviceLogActivity" android:exported="false" />
+        <activity android:name=".LabActivity" android:exported="false" />
+
+        <activity android:name=".WeatherActivity" android:exported="false" />
+        <activity android:name=".integration.BandDetailsActivity" android:exported="false" />
+        <service android:name=".service.BandLiveService" android:exported="false"
+            android:foregroundServiceType="connectedDevice" android:stopWithTask="false" />
+        <service android:name=".service.BandTileService" android:exported="true"
+            android:icon="@drawable/ic_qs_band" android:label="手环"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+        <service android:name=".notify.BandNotificationListener" android:exported="false"
+            android:enabled="false"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <receiver android:name=".service.BootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.USER_UNLOCKED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <provider android:name=".integration.DeviceCardProvider"
+            android:authorities="com.originband.link.devices"
+            android:exported="true" android:grantUriPermissions="false" />
+        <provider android:name=".integration.WeatherSnapshotProvider"
+            android:authorities="com.originband.link.weather"
+            android:exported="true" android:grantUriPermissions="true" />
+        <provider android:name=".integration.HealthQueueProvider"
+            android:authorities="com.originband.link.health"
+            android:exported="true" android:directBootAware="false"
+            android:grantUriPermissions="false" />
+        <provider android:name=".integration.CredentialProvider"
+            android:authorities="com.originband.link.credentials"
+            android:exported="true" android:directBootAware="false"
+            android:grantUriPermissions="false" />
+        <provider android:name=".integration.PhoneAlarmProvider"
+            android:authorities="com.originband.link.phone-alarm"
+            android:exported="true" android:grantUriPermissions="false" />
+        <provider android:name="androidx.core.content.FileProvider"
+            android:authorities="com.originband.link.debuglog"
+            android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/debug_log_paths" />
+        </provider>
+    </application>
+</manifest>
