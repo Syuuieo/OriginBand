@@ -92,6 +92,7 @@ class BleGattClient(
     // notifications are already arriving. A short queue aborts that sync.
     private val incoming: BlockingQueue<Rx> = ArrayBlockingQueue(128)
     private val transportAcks: BlockingQueue<ByteArray> = ArrayBlockingQueue(8)
+    private val singleAck = AtomicReference<CountDownLatch?>()
     private val failure = AtomicReference<String?>()
     private val ready = CountDownLatch(1)
     private val subscribeStarted = AtomicBoolean()
@@ -183,7 +184,20 @@ class BleGattClient(
         val frames = BleV1Codec.encodeOutgoing(payload, budget, encrypted, counter)
         SessionLog.line(context, "ble mtu=$budget frames=${frames.size} wire=${frames[0].size}")
         if (frames.size == 1) {
-            writeRaw(target, frames[0])
+            if (target === writer && writerNotifies) {
+                val latch = CountDownLatch(1)
+                singleAck.set(latch)
+                try {
+                    writeRaw(target, frames[0])
+                    if (!latch.await(1_500L, TimeUnit.MILLISECONDS)) {
+                        SessionLog.line(context, "ble single ack timeout")
+                    }
+                } finally {
+                    singleAck.compareAndSet(latch, null)
+                }
+            } else {
+                writeRaw(target, frames[0])
+            }
             return
         }
         if (!writerNotifies) throw SppDiagnosticClient.Failure("BLE_CHUNK_ACK_UNSUPPORTED")
@@ -230,6 +244,7 @@ class BleGattClient(
             }
         }
         failPending("CANCELLED")
+        singleAck.getAndSet(null)?.countDown()
         writerThread?.interrupt()
         incoming.offer(Rx(ByteArray(0), false, false))
         transportAcks.offer(ByteArray(0))
@@ -323,12 +338,10 @@ class BleGattClient(
             } else {
                 BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             }
-            op.target.writeType = type
-            @Suppress("DEPRECATION")
-            op.target.value = op.frame
             for (attempt in 0 until 6) {
-                @Suppress("DEPRECATION")
-                if (link.writeCharacteristic(op.target)) return true
+                if (link.writeCharacteristic(op.target, op.frame, type) == BluetoothStatusCodes.SUCCESS) {
+                    return true
+                }
                 if (closed) throw SppDiagnosticClient.Failure("CANCELLED")
                 Thread.sleep(25L * (attempt + 1))
             }
@@ -338,6 +351,7 @@ class BleGattClient(
     }
 
     private fun failPending(code: String) {
+        singleAck.getAndSet(null)?.countDown()
         val inflight = currentWrite.get()
         if (inflight != null) inflight.error = code
         while (true) {
@@ -482,11 +496,13 @@ class BleGattClient(
         val uuid = characteristic.uuid
         try {
             if (writeUuid == uuid) {
-                // Single-frame writes do not wait for the payload ACK (type 3). Those ACKs
-                // are identical and arrive once per command. Queueing them filled the 8-slot
-                // ack queue and aborted every Band 8 session after the handshake burst.
-                // Only a chunked write is waiting, and it only needs chunk ACKs (type 1).
-                // The icon path writes the upload characteristic, so its ACK is not on protoTX.
+                // Single-frame writes await TYPE_PAYLOAD_ACK (type 3) via singleAck without filling
+                // the 8-slot chunk ACK queue (type 1). The icon path writes the upload
+                // characteristic, so its ACK arrives elsewhere and does not touch these latches.
+                if (BleV1Codec.control(value, BleV1Codec.TYPE_PAYLOAD_ACK)) {
+                    singleAck.getAndSet(null)?.countDown()
+                    return
+                }
                 if (BleV1Codec.control(value, BleV1Codec.TYPE_CHUNK_ACK) && !transportAcks.offer(value)) {
                     SessionLog.line(context, "ble chunk ack dropped")
                 }

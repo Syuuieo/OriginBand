@@ -395,6 +395,73 @@ class OwnershipController(context: Context) {
                     HostIdentity.HEALTH_NOTIFICATION_LISTENER
         }
 
+        @JvmStatic
+        fun allowLocalListenerCommand(): String {
+            return "cmd notification allow_listener com.originband.link/com.originband.link.notify.BandNotificationListener"
+        }
+
+        @JvmStatic
+        fun allowLocalListener(): Boolean {
+            return try {
+                execute(allowLocalListenerCommand(), 8)
+                true
+            } catch (_: Failure) {
+                false
+            }
+        }
+
+        @JvmStatic
+        fun grantCallPermissionsCommands(): List<String> = listOf(
+            "pm grant com.originband.link android.permission.READ_PHONE_STATE",
+            "pm grant com.originband.link android.permission.ANSWER_PHONE_CALLS",
+            "cmd appops set com.originband.link READ_PHONE_STATE allow",
+            "cmd appops set com.originband.link ANSWER_PHONE_CALLS allow",
+        )
+
+        @JvmStatic
+        fun grantCallPermissions(): Boolean {
+            return try {
+                for (command in grantCallPermissionsCommands()) {
+                    execute(command, 8)
+                }
+                true
+            } catch (_: Failure) {
+                false
+            }
+        }
+
+        @JvmStatic
+        fun grantSmsPermissionCommands(): List<String> = listOf(
+            "pm grant com.originband.link android.permission.SEND_SMS",
+            "cmd appops set com.originband.link SEND_SMS allow",
+        )
+
+        @JvmStatic
+        fun grantSmsPermission(): Boolean {
+            return try {
+                for (command in grantSmsPermissionCommands()) {
+                    execute(command, 8)
+                }
+                true
+            } catch (_: Failure) {
+                false
+            }
+        }
+
+        @JvmStatic
+        fun setMediaVolumeCommand(index: Int): String =
+            "cmd media_session volume --show --stream 3 --set ${maxOf(0, index)}"
+
+        @JvmStatic
+        fun setMediaVolume(index: Int): Boolean {
+            return try {
+                execute(setMediaVolumeCommand(index), 4)
+                true
+            } catch (_: Failure) {
+                false
+            }
+        }
+
         /** One fixed component. Shell uid may run this; the app cannot grant its own listener. */
         @JvmStatic
         fun allowHealthListener(): Boolean {

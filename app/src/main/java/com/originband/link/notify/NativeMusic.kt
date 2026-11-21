@@ -37,7 +37,7 @@ object NativeMusic {
     /** Same pause key the band sends. Listener first, then the Health controller. */
     @JvmStatic
     fun pause(context: Context) {
-        if (!PhoneMusic.handle(1, 0, false)) dispatch(context, 1, 0, false)
+        if (!PhoneMusic.pauseForSleep()) dispatch(context, 1, 0, false)
     }
 
     private fun dispatch(context: Context, key: Int, volume: Int, refresh: Boolean) {

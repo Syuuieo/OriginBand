@@ -15,6 +15,7 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -53,6 +54,7 @@
         <activity android:name=".LabActivity" android:exported="false" />
 
         <activity android:name=".WeatherActivity" android:exported="false" />
+        <activity android:name=".NotificationSettingsActivity" android:exported="false" />
         <activity android:name=".integration.BandDetailsActivity" android:exported="false" />
         <service android:name=".service.BandLiveService" android:exported="false"
             android:foregroundServiceType="connectedDevice" android:stopWithTask="false" />
@@ -66,12 +68,17 @@
                 android:value="true" />
         </service>
         <service android:name=".notify.BandNotificationListener" android:exported="false"
-            android:enabled="false"
+            android:enabled="true"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+        <receiver android:name=".notify.FindPhoneStopReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="com.originband.link.ACTION_STOP_FIND_PHONE" />
+            </intent-filter>
+        </receiver>
         <receiver android:name=".service.BootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

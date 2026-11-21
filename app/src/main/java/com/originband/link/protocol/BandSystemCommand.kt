@@ -16,6 +16,15 @@ object BandSystemCommand {
         return if (command.system.findDevice == 0) FindPhone.START else FindPhone.STOP
     }
 
+    /** Reports to the band that the phone stopped ringing so its Find Phone screen exits. */
+    @JvmStatic
+    fun findPhoneStop(): XiaomiProto.Command =
+        XiaomiProto.Command.newBuilder()
+            .setType(2)
+            .setSubtype(17)
+            .setSystem(XiaomiProto.System.newBuilder().setFindDevice(1))
+            .build()
+
     /** Find-watch is type 2 subtype 18. Zero starts the band ring, one stops it. */
     @JvmStatic
     fun findWatch(start: Boolean): XiaomiProto.Command =

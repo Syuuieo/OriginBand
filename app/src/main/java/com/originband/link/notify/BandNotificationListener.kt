@@ -53,6 +53,10 @@ class BandNotificationListener : NotificationListenerService() {
         if (key == null || key == "observedPackages" || key.startsWith("policy") || key.startsWith("health")) {
             return@OnSharedPreferenceChangeListener
         }
+        if (key == "musicEnabled") {
+            main.post { PhoneMusic.onPreferenceChanged(this@BandNotificationListener) }
+            return@OnSharedPreferenceChangeListener
+        }
         main.post(::resetSession)
     }
 
@@ -196,7 +200,49 @@ class BandNotificationListener : NotificationListenerService() {
         val call = item.notification
         if (call != null && Notification.CATEGORY_CALL == call.category) {
             if (!BandLiveService.notificationSessionReady(this)) wakeLive()
-            skip("call", item.packageName)
+            val dialer = getSystemService(TelecomManager::class.java)?.defaultDialerPackage
+            if (dialer != null && dialer == item.packageName && BandLiveService.ownsCalls()) {
+                skip("call", item.packageName)
+                return
+            }
+            if (CallPresentation.connected(call)) {
+                skip("call-active", item.packageName)
+                hold.remove(item.key)
+                relay.removed(item.key)
+                return
+            }
+            val callsOn = settings.getBoolean("callsEnabled", false)
+            val allowed = callsOn ||
+                NotifyAdmission.packageAllowed(settings.getStringSet("packages", emptySet()), item.packageName)
+            if (!allowed || call.visibility == Notification.VISIBILITY_SECRET || HealthListenerState.connected()) {
+                skip(if (HealthListenerState.connected()) "health-live" else "call-filtered", item.packageName)
+                hold.remove(item.key)
+                relay.removed(item.key)
+                return
+            }
+            val callRanking = Ranking()
+            val hasRanking = rankings != null && rankings.getRanking(item.key, callRanking)
+            val callImportance = if (hasRanking) callRanking.importance else NotificationManager.IMPORTANCE_HIGH
+            val callEvent = event(
+                item = item,
+                n = call,
+                ranking = callRanking,
+                importanceOverride = callImportance,
+                bypassAllowlist = callsOn,
+            )
+            if (!BandLiveService.notificationSessionReady(this)) {
+                hold.put(callEvent)
+                skip("session", item.packageName)
+                wakeLive()
+                return
+            }
+            hold.remove(item.key)
+            val appName = callEvent.appName()
+            SessionLog.line(
+                this,
+                "NOTIFY_CALL pkg=${item.packageName} app=${if (appName == item.packageName) "package" else "label"}",
+            )
+            relay.posted(callEvent)
             return
         }
         if (HealthListenerState.connected()) {
@@ -238,12 +284,20 @@ class BandNotificationListener : NotificationListenerService() {
         if (!NotifyAdmission.packageAllowed(settings.getStringSet("packages", emptySet()), item.packageName)) {
             return false
         }
+        if (localScreenBlocked()) return false
         if (healthBlock(item, notification) != null) return false
         if (notification == null) return false
         if (notification.visibility == Notification.VISIBILITY_SECRET) return false
         if (rankings == null || !rankings.getRanking(item.key, ranking)) return false
         if (ranking.importance <= NotificationManager.IMPORTANCE_LOW) return false
         return true
+    }
+
+    private fun localScreenBlocked(): Boolean {
+        if (settings.getBoolean("screenOnPush", true)) return false
+        val power = getSystemService(PowerManager::class.java)
+        val interactive = power != null && power.isInteractive
+        return NotifyAdmission.screenBlocks(false, interactive, locked(this))
     }
 
     private fun healthBlock(item: StatusBarNotification, notification: Notification?): String? {
@@ -302,6 +356,8 @@ class BandNotificationListener : NotificationListenerService() {
         item: StatusBarNotification,
         n: Notification,
         ranking: Ranking,
+        importanceOverride: Int = ranking.importance,
+        bypassAllowlist: Boolean = false,
     ): NotificationRelay.Event {
         val isLocked = locked(this)
         var visible = n
@@ -332,7 +388,8 @@ class BandNotificationListener : NotificationListenerService() {
             isLocked,
             false,
             false,
-            ranking.importance,
+            importanceOverride,
+            bypassAllowlist,
         )
     }
 
@@ -347,6 +404,7 @@ class BandNotificationListener : NotificationListenerService() {
         if (!NotifyAdmission.packageAllowed(settings.getStringSet("packages", emptySet()), item.packageName)) {
             return "package"
         }
+        if (localScreenBlocked()) return "screen"
         val health = healthBlock(item, notification)
         if (health != null) return health
         if (notification == null) return "empty"
@@ -432,6 +490,13 @@ class BandNotificationListener : NotificationListenerService() {
             }
             return false
         }
+
+        @JvmStatic
+        fun listenerSettingsIntent(context: Context): Intent =
+            Intent("android.settings.NOTIFICATION_LISTENER_DETAIL_SETTINGS").putExtra(
+                "android.provider.extra.NOTIFICATION_LISTENER_COMPONENT_NAME",
+                ComponentName(context, BandNotificationListener::class.java).flattenToString(),
+            )
 
         @JvmStatic
         fun listenerConnected(): Boolean {

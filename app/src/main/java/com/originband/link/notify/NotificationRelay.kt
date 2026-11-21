@@ -19,7 +19,7 @@ class NotificationRelay(
         fun send(command: XiaomiProto.Command): CompletionStage<Void?>
     }
 
-    data class Event(
+    data class Event @JvmOverloads constructor(
         @JvmField val packageName: String?,
         @JvmField val appName: String?,
         @JvmField val key: String?,
@@ -33,6 +33,7 @@ class NotificationRelay(
         @JvmField val foreground: Boolean,
         @JvmField val summary: Boolean,
         @JvmField val importance: Int,
+        @JvmField val bypassAllowlist: Boolean = false,
     ) {
         fun packageName(): String? = packageName
         fun appName(): String? = appName
@@ -153,8 +154,8 @@ class NotificationRelay(
 
     @Synchronized
     fun posted(event: Event) {
-        if (!NotifyAdmission.packageAllowed(packages, event.packageName) || event.foreground || event.summary ||
-            event.importance <= 2 || event.visibility == -1
+        if ((!event.bypassAllowlist && !NotifyAdmission.packageAllowed(packages, event.packageName)) ||
+            event.foreground || event.summary || event.importance <= 2 || event.visibility == -1
         ) {
             removed(event.key)
             return

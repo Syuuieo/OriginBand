@@ -382,6 +382,13 @@ class BandLiveService : Service() {
                 SessionLog.line(this, "KEEP_AWAKE")
             } catch (ignored: RuntimeException) {
             }
+            if (getSharedPreferences("notification-settings", MODE_PRIVATE).getBoolean("callsEnabled", false) &&
+                (checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED ||
+                    checkSelfPermission(android.Manifest.permission.ANSWER_PHONE_CALLS) != PackageManager.PERMISSION_GRANTED)
+            ) {
+                OwnershipController.grantCallPermissions()
+                calls?.refresh()
+            }
             // ColourOS freezes this process through the framework cgroup freezer; root can undo
             // that within seconds and the guard shell survives the freeze itself.
             RootFreezeGuard.start(this)
@@ -711,12 +718,28 @@ class BandLiveService : Service() {
                             calls?.onBandCommand(command)
                         }
                         if (command.type == 2 && command.subtype == 17) {
+                            Log.i(
+                                "OriginBand",
+                                "FIND_PHONE_RX hasSystem=${command.hasSystem()} " +
+                                    "hasFind=${command.hasSystem() && command.system.hasFindDevice()} " +
+                                    "val=${if (command.hasSystem()) command.system.findDevice else -1} " +
+                                    "status=${command.status}",
+                            )
                             main.post { FindPhone.onBandCommand(this@BandLiveService, command) }
                         }
                         if (command.type == 18) {
+                            val detail = if (command.subtype == 2 && command.hasMusic() && command.music.hasMediaKey()) {
+                                val mk = command.music.mediaKey
+                                " key=${mk.key} vol=${mk.volume} hasVol=${mk.hasVolume()}"
+                            } else {
+                                ""
+                            }
+                            Log.i("OriginBand", "MUSIC_RX subtype=${command.subtype}$detail")
                             if (command.subtype == 0) {
                                 SessionLog.line(this@BandLiveService, "MUSIC_REQ")
-                                main.post { replyMusic() }
+                                if (!PhoneMusic.attached()) {
+                                    main.post { replyMusic() }
+                                }
                             }
                             main.post { NativeMusic.onBandCommand(this@BandLiveService, command) }
                         }
@@ -2443,8 +2466,12 @@ class BandLiveService : Service() {
         }
 
         @JvmStatic
+        fun ownsCalls(): Boolean = instance?.calls?.ownsCalls() == true
+
+        @JvmStatic
         fun refreshNotificationSettings(context: Context?) {
             BandNotificationListener.connectionChanged()
+            PhoneMusic.onPreferenceChanged(context)
             val live = instance
             if (live != null && !live.stopRequested) live.calls?.refresh()
         }

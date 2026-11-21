@@ -170,6 +170,7 @@ class PhoneCallMonitor(
 
     private fun hangupEnabled(): Boolean =
         !closed &&
+            settings.getBoolean("callsHangup", true) &&
             context.getSystemService(UserManager::class.java)?.isUserUnlocked == true &&
             repository.isRegistered() &&
             LocalPrefs.open(context, "ownership").getString("mode", "OFFICIAL") == "NATIVE" &&
@@ -238,8 +239,17 @@ class PhoneCallMonitor(
         return when (phase) {
             PhoneCallGate.Phase.INCOMING -> {
                 val title = BandNotificationListener.currentIncomingCallTitle(context)
-                if (!title.isNullOrBlank()) caller = title
-                BandNotificationCommand.call(caller, null, BandNotificationCommand.CALL_INCOMING, now, zone, false)
+                caller = title?.takeIf { it.isNotBlank() } ?: "来电"
+                val smsReply = smsReplyEnabled()
+                val number = if (smsReply) BandNotificationListener.currentIncomingCallNumber(context) else null
+                BandNotificationCommand.call(
+                    caller,
+                    number,
+                    BandNotificationCommand.CALL_INCOMING,
+                    now,
+                    zone,
+                    smsReply && number != null,
+                )
             }
             PhoneCallGate.Phase.ACTIVE -> BandNotificationCommand.call(
                 if (caller == "来电") "通话中" else caller,
@@ -257,7 +267,10 @@ class PhoneCallMonitor(
                 zone,
                 false,
             )
-            PhoneCallGate.Phase.NONE -> BandNotificationCommand.endCall()
+            PhoneCallGate.Phase.NONE -> {
+                caller = "来电"
+                BandNotificationCommand.endCall()
+            }
         }
     }
 
@@ -267,6 +280,7 @@ class PhoneCallMonitor(
 
     private fun smsReplyEnabled(): Boolean =
         hangupEnabled() &&
+            settings.getBoolean("callsSmsReply", false) &&
             context.checkSelfPermission(Manifest.permission.SEND_SMS) ==
             PackageManager.PERMISSION_GRANTED
 
@@ -319,21 +333,38 @@ class PhoneCallMonitor(
             if (!BandLiveService.notificationSessionReady(context)) disconnectGate()
             gate.setEnabled(false)
             stopListening()
+            val perm = context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) ==
+                PackageManager.PERMISSION_GRANTED
+            Log.i(
+                "OriginBand",
+                "CALL_MONITOR off eligible=${eligible()} enabled=${callsEnabled()} perm=$perm ops=${phoneStateAllowed()}",
+            )
             SessionLog.line(context, "CALL_MONITOR off eligible=${eligible()} enabled=${callsEnabled()}")
             return
         }
         try {
-            if (subscriptions == null || telephony == null) {
+            if (telephony == null) {
                 throw UnsupportedOperationException("TELEPHONY_UNAVAILABLE")
             }
-            if (!subscriptionListenerRegistered) {
-                subscriptions.addOnSubscriptionsChangedListener(coordinator, subscriptionListener)
-                subscriptionListenerRegistered = true
+            if (subscriptions != null && !subscriptionListenerRegistered) {
+                try {
+                    subscriptions.addOnSubscriptionsChangedListener(coordinator, subscriptionListener)
+                    subscriptionListenerRegistered = true
+                } catch (_: SecurityException) {
+                }
             }
-            val active = subscriptions.activeSubscriptionInfoList
             val ids = HashSet<Int>()
-            if (active != null) {
-                for (info in active) ids.add(info.subscriptionId)
+            if (subscriptions != null) {
+                try {
+                    val active = subscriptions.activeSubscriptionInfoList
+                    if (active != null) {
+                        for (info in active) ids.add(info.subscriptionId)
+                    }
+                } catch (_: SecurityException) {
+                }
+            }
+            if (ids.isEmpty()) {
+                ids.add(SubscriptionManager.INVALID_SUBSCRIPTION_ID)
             }
             val iterator = listeners.entries.iterator()
             while (iterator.hasNext()) {
@@ -345,7 +376,11 @@ class PhoneCallMonitor(
             }
             for (id in ids) {
                 if (listeners.containsKey(id)) continue
-                val subManager = telephony.createForSubscriptionId(id) ?: continue
+                val subManager = if (id == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                    telephony
+                } else {
+                    telephony.createForSubscriptionId(id)
+                } ?: continue
                 val listener = CallListener(id, subManager)
                 listeners[id] = listener
                 subManager.registerTelephonyCallback(
@@ -357,7 +392,13 @@ class PhoneCallMonitor(
             // Unlike getCallState(), this query belongs to this exact SIM. Call it from the coordinator, outside callbacks.
             val current = HashMap<Int, PhoneCallGate.State>()
             for (listener in listeners.values) {
-                current[listener.id] = stateOf(listener.manager.callStateForSubscription)
+                val callState = if (listener.id == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                    @Suppress("DEPRECATION")
+                    listener.manager.callState
+                } else {
+                    listener.manager.callStateForSubscription
+                }
+                current[listener.id] = stateOf(callState)
             }
             gate.setEnabled(true)
             if (sessionConnected && BandLiveService.notificationSessionReady(context) &&
@@ -369,7 +410,10 @@ class PhoneCallMonitor(
                 gate.replaceStates(current)
             }
             monitorFailure = null
+            Log.i("OriginBand", "CALL_MONITOR active subs=${listeners.keys}")
         } catch (failure: RuntimeException) {
+            Log.w("OriginBand", "CALL_MONITOR failed ${failure.javaClass.simpleName}: ${failure.message}")
+            SessionLog.line(context, "CALL_MONITOR_ERR ${failure.javaClass.simpleName}")
             monitorFailure = if (failure is SecurityException) {
                 "PHONE_PERMISSION_REQUIRED"
             } else {

@@ -45,4 +45,13 @@ class BandSystemCommandTest {
         assertEquals(0, start.system.findDevice)
         assertEquals(1, stop.system.findDevice)
     }
+
+    @Test
+    fun findPhoneStopUsesSubtypeSeventeenAndValueOne() {
+        val command = BandSystemCommand.findPhoneStop()
+        assertEquals(2, command.type)
+        assertEquals(17, command.subtype)
+        assertEquals(1, command.system.findDevice)
+        assertEquals(BandSystemCommand.FindPhone.STOP, BandSystemCommand.findPhone(command))
+    }
 }

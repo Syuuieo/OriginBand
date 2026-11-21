@@ -60,6 +60,7 @@ import com.originband.link.integration.CredentialProvider
 import com.originband.link.integration.DeviceCardProvider
 import com.originband.link.integration.HealthQueueProvider
 import com.originband.link.notify.BandNotificationListener
+import com.originband.link.notify.NotificationSettingsPolicy
 import com.originband.link.notify.SleepMusic
 import com.originband.link.protocol.SppDiagnosticClient
 import com.originband.link.service.BandLiveService
@@ -137,6 +138,8 @@ class MainActivity : ComponentActivity() {
         val showNearbyNotice: Boolean = false,
         val showNotifyNotice: Boolean = false,
         val showHealthAccessNotice: Boolean = false,
+        val showListenerNotice: Boolean = false,
+        val linkageSummary: String = "",
         val sleepStateUnsupported: Boolean = false,
         val sleepPauseEnabled: Boolean = false,
         val showManagement: Boolean = false,
@@ -270,6 +273,9 @@ class MainActivity : ComponentActivity() {
                 },
                 onOpenAppNotifications = ::openAppNotificationSettings,
                 onOpenHealthListener = ::openHealthListenerSettings,
+                onOpenNotificationSettings = {
+                    startActivity(Intent(this, NotificationSettingsActivity::class.java))
+                },
                 onOpenDetails = { startActivity(Intent(this, BandDetailsActivity::class.java)) },
                 onOpenWeather = { startActivity(Intent(this, WeatherActivity::class.java)) },
                 onSleepPauseToggle = ::applySleepPause,
@@ -423,10 +429,21 @@ class MainActivity : ComponentActivity() {
                 && !prefs.getBoolean("healthApproved", true)
                 && prefs.getBoolean("healthGrantFailed", false)
         val notificationsEnabled = getSystemService(NotificationManager::class.java).areNotificationsEnabled()
+        val listenerGranted = BandNotificationListener.accessGranted(this)
+        val registered = BandStateRepository(this).isRegistered()
+        val notifySettings = getSharedPreferences(BandNotificationListener.SETTINGS, MODE_PRIVATE)
+        val linkage = NotificationSettingsPolicy.homeSummary(
+            listenerGranted,
+            notifySettings.getBoolean("enabled", true),
+            notifySettings.getBoolean("callsEnabled", false),
+            notifySettings.getBoolean("musicEnabled", true),
+        )
         uiState = uiState.copy(
             showNearbyNotice = !hasBluetoothPermission(),
             showNotifyNotice = !notificationsEnabled,
             showHealthAccessNotice = healthAccess,
+            showListenerNotice = registered && !listenerGranted,
+            linkageSummary = linkage,
         )
     }
 
@@ -813,6 +830,14 @@ class MainActivity : ComponentActivity() {
                 && notifyPrefs.getBoolean("healthSecure", false)
                 && !notifyPrefs.getBoolean("healthApproved", true)
                 && notifyPrefs.getBoolean("healthGrantFailed", false)
+            val listenerGranted = BandNotificationListener.accessGranted(this)
+            val notifySettings = getSharedPreferences(BandNotificationListener.SETTINGS, MODE_PRIVATE)
+            val linkage = NotificationSettingsPolicy.homeSummary(
+                listenerGranted,
+                notifySettings.getBoolean("enabled", true),
+                notifySettings.getBoolean("callsEnabled", false),
+                notifySettings.getBoolean("musicEnabled", true),
+            )
 
             val devName: String
             val statText: String
@@ -877,6 +902,8 @@ class MainActivity : ComponentActivity() {
                     showNearbyNotice = !hasBluetoothPermission(),
                     showNotifyNotice = !getSystemService(NotificationManager::class.java).areNotificationsEnabled(),
                     showHealthAccessNotice = healthAccess,
+                    showListenerNotice = registered && !listenerGranted,
+                    linkageSummary = linkage,
                 )
             }
         }
@@ -1133,6 +1160,7 @@ private fun MainScreen(
     onRequestBluetooth: () -> Unit,
     onOpenAppNotifications: () -> Unit,
     onOpenHealthListener: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
     onOpenDetails: () -> Unit,
     onOpenWeather: () -> Unit,
     onSleepPauseToggle: (Boolean) -> Unit,
@@ -1275,10 +1303,24 @@ private fun MainScreen(
                 onAction = onOpenHealthListener,
             )
         }
+        if (state.showListenerNotice) {
+            NoticeCard(
+                tone = Tone.ACTIVE,
+                message = "开启 OriginBand 的通知使用权后，消息通知、音乐同步与来电姓名都会转到手环。",
+                actionLabel = "前往通知与联动",
+                onAction = onOpenNotificationSettings,
+            )
+        }
 
         // Features
         SectionHeading(text = "功能")
         SectionCard {
+            NavRow(
+                title = "通知与联动",
+                subtitle = state.linkageSummary,
+                onClick = onOpenNotificationSettings,
+            )
+            CardDivider()
             NavRow(title = "设备详情", onClick = onOpenDetails)
             CardDivider()
             NavRow(title = "天气同步", onClick = onOpenWeather)
