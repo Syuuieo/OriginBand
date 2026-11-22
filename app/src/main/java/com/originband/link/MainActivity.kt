@@ -40,13 +40,17 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
+import com.itos.coui.icons.CouiIcons
+import com.itos.coui.navigation.CouiNavigationItem
+import com.itos.coui.navigation.NavigationBar as CouiNavigationBar
 import com.originband.link.data.BandCatalog
 import com.originband.link.data.BandStateRepository
 import com.originband.link.data.BindingStore
@@ -116,6 +120,7 @@ class MainActivity : ComponentActivity() {
         data object ConfirmRestoreForProfile : MainDialog
         data object ConfirmProfileCapture : MainDialog
         data object ConfirmProtocolCapture : MainDialog
+        data class UpdateResult(val newer: Boolean, val message: String, val url: String) : MainDialog
     }
 
     @Immutable
@@ -241,6 +246,35 @@ class MainActivity : ComponentActivity() {
         BandLiveService.refreshNotificationSettings(this)
     }
 
+    @Volatile
+    private var pendingExportLog: java.io.File? = null
+
+    private val exportDebugLogLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri ->
+        val source = pendingExportLog
+        pendingExportLog = null
+        if (uri == null || source == null || !source.isFile) return@registerForActivityResult
+        worker.execute {
+            val ok = try {
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    source.inputStream().use { input -> input.copyTo(out) }
+                } != null
+            } catch (_: Exception) {
+                false
+            }
+            main.post {
+                if (!isDestroyed) {
+                    Toast.makeText(
+                        this,
+                        if (ok) "调试日志已导出" else "调试日志导出中断，稍后再试一次",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        }
+    }
+
     private val deviceObserver = object : ContentObserver(main) {
         override fun onChange(selfChange: Boolean) = refreshDevice()
     }
@@ -288,7 +322,8 @@ class MainActivity : ComponentActivity() {
                         )
                     )
                 },
-                onShareDebugLog = ::shareDebugLog,
+                onShareDebugLog = ::exportDebugLog,
+                onCheckUpdate = ::checkForUpdates,
                 onRestoreOfficial = { changeOwnership(Change.RESTORE) },
                 onRequestRemove = { uiState = uiState.copy(activeDialog = MainDialog.ConfirmRemove) },
                 onToggleAdvanced = {
@@ -352,6 +387,10 @@ class MainActivity : ComponentActivity() {
                 onConfirmProtocolCapture = {
                     uiState = uiState.copy(activeDialog = MainDialog.None)
                     action("openCapture", null)
+                },
+                onOpenUrl = { url ->
+                    uiState = uiState.copy(activeDialog = MainDialog.None)
+                    runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
                 },
             )
         }
@@ -479,22 +518,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun shareDebugLog() {
+    private fun exportDebugLog() {
         worker.execute {
             try {
                 val file = SessionLog.export(this)
-                val uri = FileProvider.getUriForFile(this, "com.originband.link.debuglog", file)
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "application/zip"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    putExtra(Intent.EXTRA_SUBJECT, "OriginBand 调试日志")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                val qq = Intent(send).setPackage("com.tencent.mobileqq")
+                pendingExportLog = file
                 main.post {
-                    if (isDestroyed) return@post
-                    if (qq.resolveActivity(packageManager) != null) startActivity(qq)
-                    else startActivity(Intent.createChooser(send, "发送调试日志"))
+                    if (!isDestroyed) {
+                        exportDebugLogLauncher.launch(file.name)
+                    }
                 }
             } catch (_: Exception) {
                 main.post {
@@ -1149,6 +1181,26 @@ class MainActivity : ComponentActivity() {
         launchHostAfterOpen = true
         action("openDiagnostics", null)
     }
+
+    private fun checkForUpdates() {
+        if (worker.isShutdown) return
+        uiState = uiState.copy(
+            activeDialog = MainDialog.UpdateResult(false, "正在检查 GitHub 最新版本…", UpdateChecker.RELEASES_URL),
+        )
+        worker.execute {
+            val result = UpdateChecker.check(BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+            main.post {
+                if (isDestroyed) return@post
+                uiState = uiState.copy(
+                    activeDialog = MainDialog.UpdateResult(
+                        newer = result.newer(),
+                        message = result.notes(),
+                        url = result.htmlUrl(),
+                    ),
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -1167,6 +1219,7 @@ private fun MainScreen(
     onShowGuide: () -> Unit,
     onOpenSystemPermissions: () -> Unit,
     onShareDebugLog: () -> Unit,
+    onCheckUpdate: () -> Unit,
     onRestoreOfficial: () -> Unit,
     onRequestRemove: () -> Unit,
     onToggleAdvanced: () -> Unit,
@@ -1188,267 +1241,339 @@ private fun MainScreen(
     onConfirmRestoreForProfile: () -> Unit,
     onConfirmProfileCapture: () -> Unit,
     onConfirmProtocolCapture: () -> Unit,
+    onOpenUrl: (String) -> Unit,
 ) {
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val navItems = listOf(
+        CouiNavigationItem(
+            title = "设备",
+            icon = CouiIcons.Filled.Bluetooth,
+            selectedIcon = CouiIcons.Filled.Bluetooth,
+        ),
+        CouiNavigationItem(
+            title = "关于",
+            icon = CouiIcons.Filled.MultiPhone,
+            selectedIcon = CouiIcons.Filled.MultiPhone,
+        ),
+    )
+    val pageTitle = if (selectedTab == 0) "OriginBand" else "关于"
     OriginBandScaffold(
-        title = "OriginBand",
+        title = pageTitle,
         largeTopBar = true,
-    ) {
-        // Status card
-        SectionCard {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = state.deviceName,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                StatusBadge(text = state.statusText, tone = state.statusTone)
-            }
-            if (state.connectionHint.isNotBlank()) {
-                Text(
-                    text = state.connectionHint,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (state.metricsLine.isNotBlank()) {
-                Text(
-                    text = state.metricsLine,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (state.healthLine.isNotBlank()) {
-                Text(
-                    text = state.healthLine,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (state.ownershipStatus.isNotBlank()) {
-                Text(
-                    text = state.ownershipStatus,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            PrimaryButton(
-                label = state.primaryLabel,
-                enabled = state.primaryEnabled,
-                onClick = onPrimaryAction,
+        bottomBar = {
+            CouiNavigationBar(
+                items = navItems,
+                selectedIndex = selectedTab,
+                onSelection = { selectedTab = it },
             )
-        }
-
-        // First-run checklist
-        if (state.showChecklist) {
-            SectionCard(title = "首次设置 · 第 ${state.visibleStepIndex} 步（共 3 步）") {
-                StepRow(1, "授权 Root", stepStateCompose(1, state.visibleStepIndex))
-                StepRow(2, "导入绑定", stepStateCompose(2, state.visibleStepIndex))
-                StepRow(3, "添加到健康", stepStateCompose(3, state.visibleStepIndex))
-                if (state.primaryHint.isNotBlank()) {
-                    Text(
-                        text = state.primaryHint,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (!state.rootGranted) {
-                    SecondaryButton(
-                        label = "打开 Root 管理器",
-                        enabled = !state.probingRoot,
-                        onClick = onOpenKernelSu,
-                    )
-                }
-                ExpandableSection(
-                    title = "开始前准备",
-                    expanded = state.prereqExpanded,
-                    onToggle = onTogglePrereq,
+        },
+    ) {
+        if (selectedTab == 0) {
+            // Status card
+            SectionCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = Copy.SETUP_PREREQ,
+                        text = state.deviceName,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatusBadge(text = state.statusText, tone = state.statusTone)
+                }
+                if (state.connectionHint.isNotBlank()) {
+                    Text(
+                        text = state.connectionHint,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            }
-        }
-
-        // Actionable notices
-        if (state.showNearbyNotice) {
-            NoticeCard(
-                tone = Tone.ATTENTION,
-                message = "授权附近设备后即可连接手环。",
-                actionLabel = "授权附近设备",
-                filled = true,
-                onAction = onRequestBluetooth,
-            )
-        }
-        if (state.showNotifyNotice) {
-            NoticeCard(
-                tone = Tone.NEUTRAL,
-                message = "开启通知后，可在通知栏看到手环连接状态。",
-                actionLabel = "开启通知",
-                onAction = onOpenAppNotifications,
-            )
-        }
-        if (state.showHealthAccessNotice) {
-            NoticeCard(
-                tone = Tone.ACTIVE,
-                message = "在系统设置里重新开启 vivo 健康的通知使用权，手机通知就能转到手环。",
-                actionLabel = "打开通知使用权",
-                onAction = onOpenHealthListener,
-            )
-        }
-        if (state.showListenerNotice) {
-            NoticeCard(
-                tone = Tone.ACTIVE,
-                message = "开启 OriginBand 的通知使用权后，消息通知、音乐同步与来电姓名都会转到手环。",
-                actionLabel = "前往通知与联动",
-                onAction = onOpenNotificationSettings,
-            )
-        }
-
-        // Features
-        SectionHeading(text = "功能")
-        SectionCard {
-            NavRow(
-                title = "通知与联动",
-                subtitle = state.linkageSummary,
-                onClick = onOpenNotificationSettings,
-            )
-            CardDivider()
-            NavRow(title = "设备详情", onClick = onOpenDetails)
-            CardDivider()
-            NavRow(title = "天气同步", onClick = onOpenWeather)
-            CardDivider()
-            Text(
-                text = "在控制中心添加「手环」磁贴，下拉或点按即可连接。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        SectionCard {
-            if (state.sleepStateUnsupported) {
-                Text(
-                    text = "当前手环会在下次同步时更新睡眠状态。",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            } else {
-                SettingSwitchRow(
-                    title = "入睡后暂停音乐",
-                    subtitle = "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。",
-                    checked = state.sleepPauseEnabled,
-                    onCheckedChange = onSleepPauseToggle,
-                )
-            }
-        }
-
-        // Help
-        SectionHeading(text = "帮助")
-        SectionCard {
-            NavRow(title = "使用说明", onClick = onShowGuide)
-            CardDivider()
-            NavRow(title = "系统权限设置", onClick = onOpenSystemPermissions)
-            CardDivider()
-            NavRow(title = "发送调试日志", onClick = onShareDebugLog)
-        }
-
-        // Management
-        if (state.showManagement) {
-            SectionHeading(text = "管理")
-            SectionCard {
-                if (state.showRestore) {
-                    SecondaryButton(
-                        label = "恢复小米运动健康",
-                        enabled = !state.changingOwnership,
-                        onClick = onRestoreOfficial,
-                    )
-                }
-                if (state.showRemove) {
-                    DangerOutlinedButton(
-                        label = "从健康移除",
-                        enabled = !state.changingOwnership,
-                        onClick = onRequestRemove,
-                    )
-                }
-                Text(
-                    text = "绑定和健康历史始终保存在本机。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        // Advanced & Debug
-        ExpandableSection(
-            title = "高级设置",
-            expanded = state.advancedExpanded,
-            onToggle = onToggleAdvanced,
-        ) {
-            SectionCard(title = "绑定导入") {
-                Text(
-                    text = "首页的「导入绑定」直接读取小米运动健康的本地数据库。" +
-                        "这里保留旧式导入窗口：选择已配对设备，在 120 秒内由官方应用重新读取绑定。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (state.bondedCaption.isNotBlank()) {
+                if (state.metricsLine.isNotBlank()) {
                     Text(
-                        text = state.bondedCaption,
-                        style = MaterialTheme.typography.bodySmall,
+                        text = state.metricsLine,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                state.bondedDevices.forEach { device ->
-                    val selected = device.mac.isNotBlank() && device.mac == state.selectedAddress
-                    BondedDeviceChoiceRow(
-                        name = device.name,
-                        selected = selected,
-                        onClick = { onSelectBonded(device.mac) },
+                if (state.healthLine.isNotBlank()) {
+                    Text(
+                        text = state.healthLine,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                PrimaryButton(
-                    label = "开启导入窗口（120 秒）",
-                    enabled = state.openWindowEnabled,
-                    onClick = onOpenImportWindow,
-                )
-                SecondaryButton(label = "关闭导入和采集窗口", onClick = onCloseWindows)
-                SecondaryButton(label = "打开小米运动健康", onClick = onLaunchMiHealth)
-                SecondaryButton(
-                    label = "恢复官方管理",
-                    enabled = state.advancedRestoreEnabled,
-                    onClick = onRestoreOfficial,
-                )
-                if (state.importStatus.isNotBlank()) {
+                if (state.ownershipStatus.isNotBlank()) {
                     Text(
-                        text = state.importStatus,
+                        text = state.ownershipStatus,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
+                PrimaryButton(
+                    label = state.primaryLabel,
+                    enabled = state.primaryEnabled,
+                    onClick = onPrimaryAction,
+                )
             }
 
-            SectionCard(title = "调试") {
-                NavRow(title = "拉取设备日志", onClick = onOpenDeviceLog)
+            // First-run checklist
+            if (state.showChecklist) {
+                SectionCard(title = "首次设置 · 第 ${state.visibleStepIndex} 步（共 3 步）") {
+                    StepRow(1, "授权 Root", stepStateCompose(1, state.visibleStepIndex))
+                    StepRow(2, "导入绑定", stepStateCompose(2, state.visibleStepIndex))
+                    StepRow(3, "添加到健康", stepStateCompose(3, state.visibleStepIndex))
+                    if (state.primaryHint.isNotBlank()) {
+                        Text(
+                            text = state.primaryHint,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (!state.rootGranted) {
+                        SecondaryButton(
+                            label = "打开 Root 管理器",
+                            enabled = !state.probingRoot,
+                            onClick = onOpenKernelSu,
+                        )
+                    }
+                    ExpandableSection(
+                        title = "开始前准备",
+                        expanded = state.prereqExpanded,
+                        onToggle = onTogglePrereq,
+                    ) {
+                        Text(
+                            text = Copy.SETUP_PREREQ,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            // Actionable notices
+            if (state.showNearbyNotice) {
+                NoticeCard(
+                    tone = Tone.ATTENTION,
+                    message = "授权附近设备后即可连接手环。",
+                    actionLabel = "授权附近设备",
+                    filled = true,
+                    onAction = onRequestBluetooth,
+                )
+            }
+            if (state.showNotifyNotice) {
+                NoticeCard(
+                    tone = Tone.NEUTRAL,
+                    message = "开启通知后，可在通知栏看到手环连接状态。",
+                    actionLabel = "开启通知",
+                    onAction = onOpenAppNotifications,
+                )
+            }
+            if (state.showHealthAccessNotice) {
+                NoticeCard(
+                    tone = Tone.ACTIVE,
+                    message = "在系统设置里重新开启 vivo 健康的通知使用权，手机通知就能转到手环。",
+                    actionLabel = "打开通知使用权",
+                    onAction = onOpenHealthListener,
+                )
+            }
+            if (state.showListenerNotice) {
+                NoticeCard(
+                    tone = Tone.ACTIVE,
+                    message = "开启 OriginBand 的通知使用权后，消息通知、音乐同步与来电姓名都会转到手环。",
+                    actionLabel = "前往通知与联动",
+                    onAction = onOpenNotificationSettings,
+                )
+            }
+
+            // Features & Linkage
+            SectionHeading(text = "联动服务")
+            SectionCard {
+                NavRow(
+                    title = "通知与联动",
+                    subtitle = state.linkageSummary,
+                    onClick = onOpenNotificationSettings,
+                )
                 CardDivider()
-                NavRow(title = "协议测试", onClick = onOpenLab)
-                if (BuildConfig.DEBUG) {
+                NavRow(title = "设备详情", onClick = onOpenDetails)
+                CardDivider()
+                NavRow(title = "天气同步", onClick = onOpenWeather)
+                CardDivider()
+                Text(
+                    text = "在控制中心添加「手环」磁贴，下拉或点按即可连接。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SectionCard {
+                if (state.sleepStateUnsupported) {
+                    Text(
+                        text = "当前手环会在下次同步时更新睡眠状态。",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                } else {
+                    SettingSwitchRow(
+                        title = "入睡后暂停音乐",
+                        subtitle = "手环报告入睡时暂停正在播放的音乐，醒来后保持暂停。",
+                        checked = state.sleepPauseEnabled,
+                        onCheckedChange = onSleepPauseToggle,
+                    )
+                }
+            }
+
+            // Management
+            if (state.showManagement) {
+                SectionHeading(text = "管理")
+                SectionCard {
+                    if (state.showRestore) {
+                        SecondaryButton(
+                            label = "恢复小米运动健康",
+                            enabled = !state.changingOwnership,
+                            onClick = onRestoreOfficial,
+                        )
+                    }
+                    if (state.showRemove) {
+                        DangerOutlinedButton(
+                            label = "从健康移除",
+                            enabled = !state.changingOwnership,
+                            onClick = onRequestRemove,
+                        )
+                    }
+                    Text(
+                        text = "绑定和健康历史始终保存在本机。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            // Advanced & Debug
+            ExpandableSection(
+                title = "高级设置与调试",
+                expanded = state.advancedExpanded,
+                onToggle = onToggleAdvanced,
+            ) {
+                SectionCard(title = "绑定导入") {
+                    Text(
+                        text = "首页的「导入绑定」直接读取小米运动健康的本地数据库。" +
+                            "这里保留旧式导入窗口：选择已配对设备，在 120 秒内由官方应用重新读取绑定。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (state.bondedCaption.isNotBlank()) {
+                        Text(
+                            text = state.bondedCaption,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    state.bondedDevices.forEach { device ->
+                        val selected = device.mac.isNotBlank() && device.mac == state.selectedAddress
+                        BondedDeviceChoiceRow(
+                            name = device.name,
+                            selected = selected,
+                            onClick = { onSelectBonded(device.mac) },
+                        )
+                    }
+                    PrimaryButton(
+                        label = "开启导入窗口（120 秒）",
+                        enabled = state.openWindowEnabled,
+                        onClick = onOpenImportWindow,
+                    )
+                    SecondaryButton(label = "关闭导入和采集窗口", onClick = onCloseWindows)
+                    SecondaryButton(label = "打开小米运动健康", onClick = onLaunchMiHealth)
+                    SecondaryButton(
+                        label = "恢复官方管理",
+                        enabled = state.advancedRestoreEnabled,
+                        onClick = onRestoreOfficial,
+                    )
+                    if (state.importStatus.isNotBlank()) {
+                        Text(
+                            text = state.importStatus,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+
+                SectionCard(title = "调试") {
+                    NavRow(title = "拉取设备日志", onClick = onOpenDeviceLog)
                     CardDivider()
-                    NavRow(title = "独立连接诊断", onClick = onOpenDiagnostic)
+                    NavRow(title = "协议测试", onClick = onOpenLab)
                     SecondaryButton(
                         label = "采集连接参数（120 秒）",
                         onClick = onStartProfileCapture,
                     )
-                    SecondaryButton(
-                        label = "采集协议消息（120 秒）",
-                        onClick = onRequestProtocolCapture,
-                    )
+                    if (BuildConfig.DEBUG) {
+                        CardDivider()
+                        NavRow(title = "独立连接诊断", onClick = onOpenDiagnostic)
+                        SecondaryButton(
+                            label = "采集协议消息（120 秒）",
+                            onClick = onRequestProtocolCapture,
+                        )
+                    }
                 }
+            }
+        } else {
+            SectionCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "OriginBand",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "版本 ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    StatusBadge(text = "开源桥接", tone = Tone.ACTIVE)
+                }
+                Text(
+                    text = "在 OriginOS 上连接小米手环/手表与系统健康、通知、通话、媒体及天气服务。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SectionHeading(text = "支持与诊断")
+            SectionCard {
+                NavRow(
+                    title = "检查更新",
+                    subtitle = "GitHub Releases · 当前 ${BuildConfig.VERSION_NAME}",
+                    onClick = onCheckUpdate,
+                )
+                CardDivider()
+                NavRow(title = "导出调试日志", subtitle = "保存会话诊断 zip 包", onClick = onShareDebugLog)
+                CardDivider()
+                NavRow(title = "系统权限设置", onClick = onOpenSystemPermissions)
+                CardDivider()
+                NavRow(title = "使用说明", onClick = onShowGuide)
+            }
+
+            SectionHeading(text = "项目信息")
+            SectionCard {
+                NavRow(
+                    title = "开源仓库",
+                    subtitle = "github.com/Syuuieo/OriginBand",
+                    onClick = { onOpenUrl("https://github.com/Syuuieo/OriginBand") },
+                )
+                CardDivider()
+                Text(
+                    text = "发行人：Syuuieo · 许可证：GNU AGPL-3.0-or-later\n界面组件基于 COUI-Kit（MPL-2.0）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
@@ -1513,6 +1638,21 @@ private fun MainScreen(
             onConfirm = onConfirmProtocolCapture,
             onDismiss = onDismissDialog,
         )
+        is MainActivity.MainDialog.UpdateResult -> if (dialog.newer) {
+            ConfirmDialog(
+                title = "发现新版本",
+                message = dialog.message,
+                confirmLabel = "前往下载",
+                onConfirm = { onOpenUrl(dialog.url) },
+                onDismiss = onDismissDialog,
+            )
+        } else {
+            InfoDialog(
+                title = "检查更新",
+                message = dialog.message,
+                onDismiss = onDismissDialog,
+            )
+        }
     }
 }
 

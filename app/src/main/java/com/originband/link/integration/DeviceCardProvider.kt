@@ -235,7 +235,12 @@ class DeviceCardProvider : ContentProvider() {
         display.putLong("stepsAtMs", state.getLong("stepsAtMs", 0))
         display.putLong("lastUpdateMs", state.getLong("lastUpdateMs", 0))
         display.putLong("revision", state.getLong("revision", 0))
-        display.putString("imageUri", DeviceImageStore.uri(ctx))
+        var imageUri = DeviceImageStore.uri(ctx)
+        if (imageUri.isEmpty()) {
+            DeviceImageStore.requestRefresh(ctx)
+            imageUri = DeviceImageStore.uri(ctx)
+        }
+        display.putString("imageUri", imageUri)
         return display
     }
 

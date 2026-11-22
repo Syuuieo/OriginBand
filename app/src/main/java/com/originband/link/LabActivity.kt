@@ -279,11 +279,17 @@ class LabActivity : ComponentActivity() {
     }
 
     private fun checkUpdate() {
-        val latest = UpdateChecker.check(BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
-        val notes = latest.notes()
-        uiState = uiState.copy(
-            resultText = notes.ifBlank { "当前版本：${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）。" }
-        )
+        uiState = uiState.copy(resultText = "正在检查 GitHub 最新版本…")
+        worker.execute {
+            val latest = UpdateChecker.check(BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+            val notes = latest.notes()
+            main.post {
+                if (isDestroyed) return@post
+                uiState = uiState.copy(
+                    resultText = notes.ifBlank { "当前版本：${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）。" },
+                )
+            }
+        }
     }
 }
 

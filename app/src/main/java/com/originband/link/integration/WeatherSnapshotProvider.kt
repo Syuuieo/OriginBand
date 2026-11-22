@@ -3,6 +3,7 @@ package com.originband.link.integration
 
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.database.Cursor
@@ -14,6 +15,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.originband.link.data.LocalPrefs
 import com.originband.link.host.HostIdentity
+import com.originband.link.service.LocalWeatherFetcher
 import org.json.JSONObject
 import java.util.UUID
 
@@ -39,6 +41,7 @@ class WeatherSnapshotProvider : ContentProvider() {
                     } else {
                         ctx.grantUriPermission(HEALTH, URI, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         if (isPending(prefs)) {
+                            LocalWeatherFetcher.fetchAsync(ctx)
                             val existing = status("WEATHER_REQUESTED")
                             existing.putString("requestId", prefs.getString("request", ""))
                             existing
@@ -53,6 +56,7 @@ class WeatherSnapshotProvider : ContentProvider() {
                                 status("WEATHER_REQUEST_STORAGE_FAILED")
                             } else {
                                 ctx.contentResolver.notifyChange(URI, null)
+                                LocalWeatherFetcher.fetchAsync(ctx)
                                 val response = status("WEATHER_REQUESTED")
                                 response.putString("requestId", request)
                                 response
@@ -272,6 +276,38 @@ class WeatherSnapshotProvider : ContentProvider() {
             val result = Bundle()
             result.putString("status", code)
             return result
+        }
+
+        @JvmStatic
+        fun storeLocalSnapshot(context: Context, snapshot: JSONObject): Boolean {
+            return try {
+                validate(snapshot)
+                val app = context.applicationContext ?: context
+                val prefs = app.getSharedPreferences("weather-bridge", 0)
+                val ok = prefs.edit()
+                    .putString("snapshot", snapshot.toString())
+                    .putString("request", "")
+                    .putString("error", "")
+                    .putLong("updatedAtMs", System.currentTimeMillis())
+                    .commit()
+                if (ok) app.contentResolver.notifyChange(UPDATED, null)
+                ok
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        @JvmStatic
+        fun reportLocalFailure(context: Context, code: String) {
+            val app = context.applicationContext ?: context
+            val prefs = app.getSharedPreferences("weather-bridge", 0)
+            // Only overwrite error if no valid snapshot is stored yet and a request is still pending.
+            if (!isPending(prefs)) return
+            prefs.edit()
+                .putString("request", "")
+                .putString("error", sourceFailure(code))
+                .commit()
+            app.contentResolver.notifyChange(UPDATED, null)
         }
     }
 }

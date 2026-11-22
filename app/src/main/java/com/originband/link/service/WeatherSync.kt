@@ -112,7 +112,7 @@ class WeatherSync(
                     result.completeExceptionally(Failure("WEATHER_CLOSED"))
                     return@execute
                 }
-                if (deferForecast) {
+                if (deferForecast && requested != Operation.SEND && requested != Operation.INSPECT) {
                     result.complete(null)
                     return@execute
                 }
@@ -242,6 +242,7 @@ class WeatherSync(
                     try {
                         val fresh = freshSnapshot(sample)
                         if (unsupportedCityList(response)) {
+                            android.util.Log.i("OriginBand", "WEATHER_CITIES unsupported status=${response.status}")
                             SessionLog.line(context, "WEATHER_CITIES unsupported")
                             if (operation == Operation.INSPECT) {
                                 finish(null)
@@ -251,6 +252,10 @@ class WeatherSync(
                             return@dispatch
                         }
                         val cities = response.weather.locations
+                        android.util.Log.i(
+                            "OriginBand",
+                            "WEATHER_CITIES raw=${cities.locationCount} accepted=${BandWeatherEncoder.acceptedCityCount(cities)} list=${cities.locationList.joinToString { "${it.code}:${it.name}" }}",
+                        )
                         SessionLog.line(
                             context,
                             "WEATHER_CITIES raw=" + cities.locationCount
@@ -359,6 +364,7 @@ class WeatherSync(
                 }
                 val status = if (set != null && set.hasStatus()) set.status else 0
                 val added = subtype == 7 && (status == 1 || status == 3)
+                android.util.Log.i("OriginBand", "WEATHER_WRITE_CITY subtype=$subtype status=$status added=$added")
                 if (status != 0 && !added) {
                     finish("WEATHER_BAND_REJECTED")
                     return@dispatch
@@ -386,7 +392,12 @@ class WeatherSync(
             freshSnapshot(sample)
             val currentQueue = transactionQueue
             if (currentQueue == null || currentQueue !== queue.get()) throw Failure("WEATHER_DISCONNECTED")
-            currentQueue.send(frames[index]).whenComplete { _, failure ->
+            val frame = frames[index]
+            android.util.Log.i(
+                "OriginBand",
+                "WEATHER_TX_FRAME ${index + 1}/${frames.size} subtype=${frame.subtype}",
+            )
+            currentQueue.send(frame).whenComplete { _, failure ->
                 dispatch {
                     if (active !== transaction) return@dispatch
                     if (failure != null) finish("WEATHER_TRANSPORT_FAILED")
@@ -401,6 +412,10 @@ class WeatherSync(
     /** Called before queue.onCommand by the sole socket reader; only schedules work. */
     fun onCommand(command: XiaomiProto.Command) {
         if (closed || command.type != 10) return
+        android.util.Log.i(
+            "OriginBand",
+            "WEATHER_RX subtype=${command.subtype} status=${if (command.hasStatus()) command.status else -1}",
+        )
         val ownCityResponse = command.subtype == 5 && awaitingCities
         dispatch {
             if (closed) return@dispatch

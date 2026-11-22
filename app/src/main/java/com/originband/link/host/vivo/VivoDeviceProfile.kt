@@ -59,6 +59,7 @@ object VivoDeviceProfile {
         @JvmField val stepsToday: Long,
         @JvmField val heartRate: Int,
         @JvmField val lastUpdateMs: Long,
+        @JvmField val imageUri: String = "",
     ) {
         fun isUsable(): Boolean = registered && normalizedMac().isNotEmpty()
 
@@ -87,6 +88,7 @@ object VivoDeviceProfile {
         fun hardwareVersion(): String = hardware.ifBlank { modelId }
 
         companion object {
+            @JvmOverloads
             @JvmStatic
             fun fromValues(
                 registered: Boolean,
@@ -102,6 +104,7 @@ object VivoDeviceProfile {
                 stepsToday: Long,
                 heartRate: Int,
                 lastUpdateMs: Long,
+                imageUri: String? = "",
             ): Snapshot = Snapshot(
                 registered,
                 nonNull(name),
@@ -116,12 +119,13 @@ object VivoDeviceProfile {
                 stepsToday,
                 heartRate,
                 lastUpdateMs,
+                nonNull(imageUri),
             )
 
             @JvmStatic
             fun fromBundle(display: Bundle?): Snapshot {
                 if (display == null) {
-                    return fromValues(false, "", "", "", "", "", "", false, -1, false, -1L, -1, 0L)
+                    return fromValues(false, "", "", "", "", "", "", false, -1, false, -1L, -1, 0L, "")
                 }
                 return fromValues(
                     display.getBoolean("registered", false),
@@ -137,6 +141,7 @@ object VivoDeviceProfile {
                     display.getLong("stepsToday", -1L),
                     display.getInt("heartRate", -1),
                     display.getLong("lastUpdateMs", 0L),
+                    display.getString("imageUri", ""),
                 )
             }
         }

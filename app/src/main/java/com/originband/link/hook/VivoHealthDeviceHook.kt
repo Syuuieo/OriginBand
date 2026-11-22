@@ -3,7 +3,12 @@ package com.originband.link.hook
 
 import android.content.Context
 import android.database.ContentObserver
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Bundle
+import android.view.View
+import android.widget.ImageView
 import com.originband.link.hook.xposed.HookRuntime
 import com.originband.link.hook.xposed.XC_MethodHook
 import com.originband.link.hook.xposed.XposedHelpers
@@ -38,8 +43,22 @@ object VivoHealthDeviceHook {
     private const val CLS_WATCH_SYNC_LISTENER =
         "com.vivo.health.lib.router.syncdata.WatchSyncListener"
     private const val CLS_RX_SINGLE = "io.reactivex.Single"
+    private const val CLS_PRODUCT_7_BIZ =
+        "com.vivo.health.devices.watch.common.business.common.WatchProduct7CommonBusiness"
+    private const val CLS_PRODUCT_8_BIZ =
+        "com.vivo.health.devices.watch.common.business.common.WatchProduct8CommonBusiness"
+    private const val CLS_PREVIEW_DECORATOR =
+        "com.vivo.health.devices.watch.common.business.common.PreviewDecorator"
+    private const val CLS_WATCH_GENERIC_PREVIEW =
+        "com.vivo.health.devices.watch.dial.generic.widget.WatchGenericPreview"
 
     private val lastDispatchedConnState = AtomicInteger(-1)
+
+    @Volatile
+    private var cachedImageUri: String = ""
+
+    @Volatile
+    private var cachedImageBitmap: Bitmap? = null
 
     @JvmStatic
     fun installInDeviceConn(context: Context, loader: ClassLoader?) {
@@ -208,8 +227,167 @@ object VivoHealthDeviceHook {
             )
         }
 
+        installDeviceImageHooks(context, loader, worker)
         HookRuntime.main().postDelayed({ worker.execute { syncMainState(context, loader) } }, 1500L)
         HookRuntime.log("OriginBand: VIVO_MAIN_DEVICE_HOOKS_INSTALLED")
+    }
+
+    private fun installDeviceImageHooks(
+        context: Context,
+        loader: ClassLoader?,
+        worker: ThreadPoolExecutor,
+    ) {
+        val bizClasses = listOf(CLS_PRODUCT_7_BIZ, CLS_PRODUCT_8_BIZ)
+        for (clsName in bizClasses) {
+            HookRuntime.tryHook("VIVO_PRODUCT_IMAGE_A_FAILED") {
+                XposedHelpers.findAndHookMethod(
+                    clsName,
+                    loader,
+                    "A",
+                    Int::class.javaPrimitiveType,
+                    String::class.java,
+                    ImageView::class.java,
+                    Int::class.javaPrimitiveType,
+                    object : XC_MethodHook() {
+                        protected override fun beforeHookedMethod(param: MethodHookParam) {
+                            val deviceId = param.args[1] as? String ?: return
+                            val imageView = param.args[2] as? ImageView ?: return
+                            if (applyVirtualDeviceImage(context, deviceId, imageView, worker)) {
+                                param.result = null
+                            }
+                        }
+                    },
+                )
+            }
+            HookRuntime.tryHook("VIVO_PRODUCT_IMAGE_M_FAILED") {
+                XposedHelpers.findAndHookMethod(
+                    clsName,
+                    loader,
+                    "m",
+                    CLS_PREVIEW_DECORATOR,
+                    String::class.java,
+                    Int::class.javaPrimitiveType,
+                    String::class.java,
+                    object : XC_MethodHook() {
+                        protected override fun beforeHookedMethod(param: MethodHookParam) {
+                            val decorator = param.args[0] ?: return
+                            val deviceId = param.args[1] as? String ?: return
+                            val targetView = (XposedHelpers.callMethod(decorator, "getSecondImage") as? ImageView)
+                                ?: (XposedHelpers.callMethod(decorator, "getFistImage") as? ImageView)
+                                ?: return
+                            if (applyVirtualDeviceImage(context, deviceId, targetView, worker)) {
+                                param.result = null
+                            }
+                        }
+                    },
+                )
+            }
+        }
+
+        HookRuntime.tryHook("VIVO_PREVIEW_DEFAULT_DIAL_FAILED") {
+            XposedHelpers.findAndHookMethod(
+                CLS_WATCH_GENERIC_PREVIEW,
+                loader,
+                "setLocalDefaultDial",
+                Int::class.javaPrimitiveType,
+                object : XC_MethodHook() {
+                    protected override fun beforeHookedMethod(param: MethodHookParam) {
+                        val preview = param.thisObject ?: return
+                        val snapshot = readSnapshot(context)
+                        if (!matchesVirtualPreview(preview, snapshot)) return
+                        applyVirtualPreview(context, preview, snapshot, worker)
+                        param.result = null
+                    }
+                },
+            )
+        }
+
+        HookRuntime.tryHook("VIVO_PREVIEW_SET_DIAL_FAILED") {
+            XposedHelpers.findAndHookMethod(
+                CLS_WATCH_GENERIC_PREVIEW,
+                loader,
+                "D",
+                object : XC_MethodHook() {
+                    protected override fun beforeHookedMethod(param: MethodHookParam) {
+                        val preview = param.thisObject ?: return
+                        val snapshot = readSnapshot(context)
+                        if (!matchesVirtualPreview(preview, snapshot)) return
+                        applyVirtualPreview(context, preview, snapshot, worker)
+                        param.result = null
+                    }
+                },
+            )
+        }
+
+        HookRuntime.tryHook("VIVO_PREVIEW_SET_BG_FAILED") {
+            XposedHelpers.findAndHookMethod(
+                CLS_WATCH_GENERIC_PREVIEW,
+                loader,
+                "K",
+                object : XC_MethodHook() {
+                    protected override fun afterHookedMethod(param: MethodHookParam) {
+                        val preview = param.thisObject ?: return
+                        val snapshot = readSnapshot(context)
+                        if (!matchesVirtualPreview(preview, snapshot)) return
+                        applyVirtualPreview(context, preview, snapshot, worker)
+                    }
+                },
+            )
+        }
+    }
+
+    private fun matchesVirtualPreview(preview: Any, snapshot: VivoDeviceProfile.Snapshot): Boolean {
+        if (!snapshot.isUsable() || snapshot.imageUri.isBlank()) return false
+        val deviceId = runCatching { XposedHelpers.getObjectField(preview, "mDeviceId") as? String }.getOrNull()
+        val productId = runCatching { XposedHelpers.getIntField(preview, "mProductId") }.getOrDefault(0)
+        return deviceId == snapshot.stableDeviceId() ||
+            (deviceId.isNullOrEmpty() && productId == snapshot.productId())
+    }
+
+    private fun applyVirtualPreview(
+        context: Context,
+        preview: Any,
+        snapshot: VivoDeviceProfile.Snapshot,
+        worker: ThreadPoolExecutor,
+    ) {
+        val dialView = runCatching { XposedHelpers.getObjectField(preview, "dialView") as? View }.getOrNull()
+        if (dialView != null) {
+            dialView.visibility = View.GONE
+            if (dialView is ImageView) dialView.setImageDrawable(null)
+        }
+        val bgView = runCatching { XposedHelpers.getObjectField(preview, "bgView") as? ImageView }.getOrNull()
+            ?: return
+        applyVirtualDeviceImage(context, snapshot.stableDeviceId(), bgView, worker)
+    }
+
+    private fun applyVirtualDeviceImage(
+        context: Context,
+        deviceId: String,
+        imageView: ImageView,
+        worker: ThreadPoolExecutor,
+    ): Boolean {
+        val snapshot = readSnapshot(context)
+        if (!snapshot.isUsable() || snapshot.stableDeviceId() != deviceId) return false
+        val uri = snapshot.imageUri
+        if (uri.isBlank()) return false
+        val cached = if (uri == cachedImageUri) cachedImageBitmap else null
+        if (cached != null) {
+            imageView.setImageBitmap(cached)
+            return true
+        }
+        worker.execute {
+            val loaded = try {
+                context.contentResolver.openInputStream(Uri.parse(uri))?.use { stream ->
+                    BitmapFactory.decodeStream(stream)
+                }
+            } catch (_: Throwable) {
+                null
+            } ?: return@execute
+            cachedImageUri = uri
+            cachedImageBitmap = loaded
+            HookRuntime.main().post { imageView.setImageBitmap(loaded) }
+        }
+        return true
     }
 
     private fun installManualSyncHooks(context: Context, loader: ClassLoader?, worker: ThreadPoolExecutor) {
